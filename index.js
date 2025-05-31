@@ -7,7 +7,7 @@ const { URL } = require('url');
 console.log("Bot Script Initializing...");
 const botStartTime = new Date();
 
-const BOT_TOKEN = '6986100353:AAEQPu_f7IRuJbbeXPI6NXvbbKq5csbWFaA';
+const BOT_TOKEN = '7566526510:AAEFbGsv4h9cgRCGNgehnAr6bYU3OJ2dbAM';
 const ADMIN_ID = '5197344486';
 
 const USER_DATA_FILE = 'user.json';
