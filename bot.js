@@ -113,15 +113,37 @@ function getYouTubeVideoId(videoUrl) {
 }
 
 async function getYouTubeVideoDetails(videoUrl) {
+    console.log(`[getYouTubeVideoDetails] Starting to fetch details for: ${videoUrl}`);
     try {
         const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
         const response = await axios.get(videoUrl, { timeout: 10000, headers: { 'User-Agent': userAgent } });
-        const htmlContent = response.data; const titleMatch = htmlContent.match(/<title[^>]*>(.*?)<\/title>/is);
-        let pageTitle = titleMatch && titleMatch[1] ? titleMatch[1] : '';
+        const htmlContent = response.data;
+        
+        const titleMatch = htmlContent.match(/<title[^>]*>(.*?)<\/title>/is);
+        
+        if (!titleMatch || !titleMatch[1]) {
+            console.error('[getYouTubeVideoDetails] ERROR: Could not find <title> tag in the HTML response.');
+            return null;
+        }
+
+        let pageTitle = titleMatch[1];
+        console.log(`[getYouTubeVideoDetails] Found raw page title: "${pageTitle}"`);
+
         const cleanTitle = he.decode(pageTitle).replace(/\s*-\s*YouTube$/i, '').trim();
-        const videoId = getYouTubeVideoId(videoUrl); if (!videoId) return null;
-        return { title: cleanTitle, thumbnail: `http://img.youtube.com/vi/${videoId}/maxresdefault.jpg` };
-    } catch (error) { return null; }
+        console.log(`[getYouTubeVideoDetails] Cleaned title: "${cleanTitle}"`);
+        
+        const videoId = getYouTubeVideoId(videoUrl);
+        if (!videoId) {
+            console.error('[getYouTubeVideoDetails] ERROR: Could not extract YouTube Video ID.');
+            return null;
+        }
+
+        return { title: cleanTitle, thumbnail: `http://img.youtube.com/vi/$${videoId}/maxresdefault.jpg` };
+
+    } catch (error) {
+        console.error(`[getYouTubeVideoDetails] CRITICAL ERROR fetching or processing URL:`, error.message);
+        return null;
+    }
 }
 
 async function shortenUrl(longUrl, title, thumbnail, chatId) {
@@ -490,9 +512,4 @@ bot.on('webhook_error', (error) => console.error(`Webhook error:`, error.code, e
 
 setInterval(keepAlive, KEEP_ALIVE_INTERVAL);
 
-console.log(`Bot is running and listening for messages... Keep-alive set for ${KEEP_ALIVE_INTERVAL / 60000} minutes.`);
-console.log("--- Suggestions for Further Development ---");
-console.log("1. Asynchronous File I/O or Database: For better performance and scalability.");
-console.log("2. More Granular Broadcast Control: e.g., scheduling, targetting specific user segments.");
-console.log("3. Environment Variables: For BOT_TOKEN and ADMIN_ID.");
-console.log("4. Detailed Logging: Using a library like Winston for better log management.");
+console.log(`Bot is running and listening for messages...`);
