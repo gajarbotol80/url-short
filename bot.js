@@ -3,6 +3,7 @@ const fs = require('fs');
 const axios = require('axios');
 const he = require('he');
 const { URL } = require('url');
+const FormData = require('form-data');
 
 console.log("Bot Script Initializing...");
 const botStartTime = new Date();
@@ -118,30 +119,52 @@ async function getYouTubeVideoDetails(videoUrl) {
         const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
         const response = await axios.get(videoUrl, { timeout: 10000, headers: { 'User-Agent': userAgent } });
         const htmlContent = response.data;
-        
         const titleMatch = htmlContent.match(/<title[^>]*>(.*?)<\/title>/is);
-        
         if (!titleMatch || !titleMatch[1]) {
             console.error('[getYouTubeVideoDetails] ERROR: Could not find <title> tag in the HTML response.');
             return null;
         }
-
         let pageTitle = titleMatch[1];
         console.log(`[getYouTubeVideoDetails] Found raw page title: "${pageTitle}"`);
-
         const cleanTitle = he.decode(pageTitle).replace(/\s*-\s*YouTube$/i, '').trim();
         console.log(`[getYouTubeVideoDetails] Cleaned title: "${cleanTitle}"`);
-        
         const videoId = getYouTubeVideoId(videoUrl);
         if (!videoId) {
             console.error('[getYouTubeVideoDetails] ERROR: Could not extract YouTube Video ID.');
             return null;
         }
-
         return { title: cleanTitle, thumbnail: `http://img.youtube.com/vi/$${videoId}/maxresdefault.jpg` };
-
     } catch (error) {
         console.error(`[getYouTubeVideoDetails] CRITICAL ERROR fetching or processing URL:`, error.message);
+        return null;
+    }
+}
+
+async function uploadToImgBB(imageBuffer) {
+    // --- PASTE YOUR IMGBB API KEY HERE ---
+    const IMGBB_API_KEY = 'YOUR_IMGBB_API_KEY';
+    
+    if (!IMGBB_API_KEY || IMGBB_API_KEY === '75bb4227159bd059fecf6bf2a6781847') {
+        console.error("ImgBB API Key is not configured. Please add it to the uploadToImgBB function.");
+        return null;
+    }
+    try {
+        console.log("Uploading image to ImgBB...");
+        const form = new FormData();
+        form.append('image', imageBuffer.toString('base64'));
+        const response = await axios.post(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, form, {
+            headers: form.getHeaders(),
+        });
+        if (response.data && response.data.success) {
+            const imageUrl = response.data.data.url;
+            console.log("Successfully uploaded to ImgBB. URL:", imageUrl);
+            return imageUrl;
+        } else {
+            console.error("ImgBB API error:", response.data.error.message);
+            return null;
+        }
+    } catch (error) {
+        console.error("Critical error during ImgBB upload:", error.message);
         return null;
     }
 }
@@ -165,12 +188,7 @@ async function shortenUrl(longUrl, title, thumbnail, chatId) {
             const displayV1 = `https://movies-links-bd.vercel.app?code=${shortCode}`;
             const displayV2 = `https://movie-links-in.vercel.app/?code=${shortCode}`;
             const displayV3 = `https://api.reshu.whf.bz/short/v2/?code=${shortCode}`;
-            return {
-                linkForSaving: linkForSavingInDb,
-                v1: displayV1,
-                v2: displayV2,
-                v3: displayV3
-            };
+            return { linkForSaving: linkForSavingInDb, v1: displayV1, v2: displayV2, v3: displayV3 };
         } else {
             console.error(`Vercel API Error (shortenUrl):`, responseData.error || 'Unknown error');
             return null;
@@ -181,37 +199,55 @@ async function shortenUrl(longUrl, title, thumbnail, chatId) {
     }
 }
 
+async function processShorteningRequest(chatId, url, title, imageUrl) {
+    await bot.sendMessage(chatId, "⏳ Processing your custom URL... please wait.");
+    const shortLinks = await shortenUrl(url, title, imageUrl, String(chatId));
+    if (shortLinks) {
+        saveUserDataSync(chatId, url, shortLinks.linkForSaving);
+        let respMsg = `URLs with custom settings:\nV1: ${shortLinks.v1}\nV2: ${shortLinks.v2}\nV3: ${shortLinks.v3}\n\nTitle: ${title}\nImage: ${imageUrl}`;
+        await bot.sendMessage(chatId, respMsg, { 
+            reply_markup: { inline_keyboard: [[{ text: '🚀 Start Another Bot', url: 'http://t.me/selfes_hack_robot?start' }]] }, 
+            disable_web_page_preview: false 
+        });
+    } else {
+        await bot.sendMessage(chatId, "🚧 Custom URL request failed.");
+    }
+    clearChatStateSync(chatId);
+}
+
 async function sendChunkedMessage(botInstance, chatId, message, parseMode = undefined) {
     const maxLength = 4096;
     if (message.length <= maxLength) {
         try { await botInstance.sendMessage(chatId, message, { parse_mode: parseMode }); }
-        catch (error) {
-            console.error(`Error sending single message (length ${message.length}): ${error.message}`);
-        } return;
+        catch (error) { console.error(`Error sending single message (length ${message.length}): ${error.message}`); }
+        return;
     }
     const chunks = []; let currentPosition = 0;
     while (currentPosition < message.length) {
-        let chunkEnd = currentPosition + maxLength; let isLastChunkOfString = false;
-        if (chunkEnd >= message.length) { chunkEnd = message.length; isLastChunkOfString = true; }
-        else { let newlineIndex = message.substring(currentPosition, chunkEnd).lastIndexOf('\n'); if (newlineIndex > 0) chunkEnd = currentPosition + newlineIndex + 1;}
+        let chunkEnd = currentPosition + maxLength;
+        if (chunkEnd >= message.length) {
+            chunkEnd = message.length;
+        } else {
+            let newlineIndex = message.substring(currentPosition, chunkEnd).lastIndexOf('\n');
+            if (newlineIndex > 0) chunkEnd = currentPosition + newlineIndex + 1;
+        }
         if (chunkEnd <= currentPosition && currentPosition < message.length) chunkEnd = currentPosition + 1;
-        if (chunkEnd <= currentPosition) break; chunks.push(message.substring(currentPosition, chunkEnd)); currentPosition = chunkEnd;
+        if (chunkEnd <= currentPosition) break;
+        chunks.push(message.substring(currentPosition, chunkEnd));
+        currentPosition = chunkEnd;
     }
     for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i]; if (chunk.length === 0) continue;
+        const chunk = chunks[i];
+        if (chunk.length === 0) continue;
         try { await botInstance.sendMessage(chatId, chunk, { parse_mode: parseMode }); }
-        catch (error) {
-            console.error(`Error sending chunk ${i + 1}/${chunks.length} (length ${chunk.length}): ${error.message}`);
-        }
+        catch (error) { console.error(`Error sending chunk ${i + 1}/${chunks.length} (length ${chunk.length}): ${error.message}`); }
     }
 }
 
 function keepAlive() {
     bot.getMe().then((botInfo) => {
         console.log(`Keep-alive ping: Bot ${botInfo.username} is alive. ${new Date().toLocaleTimeString()}`);
-    }).catch((error) => {
-        console.error(`Keep-alive ping failed: ${error.message}`);
-    });
+    }).catch((error) => { console.error(`Keep-alive ping failed: ${error.message}`); });
 }
 
 async function broadcastMessageToUsers(adminChatId, broadcastData) {
@@ -267,18 +303,14 @@ bot.on('callback_query', async (callbackQuery) => {
     const msg = callbackQuery.message;
     const data = callbackQuery.data;
     const adminChatId = String(msg.chat.id);
-
     if (adminChatId !== ADMIN_ID) {
         await bot.answerCallbackQuery(callbackQuery.id, { text: "Access Denied." });
         return;
     }
     await bot.answerCallbackQuery(callbackQuery.id);
-
     try {
       await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: adminChatId, message_id: msg.message_id });
-    } catch(e) { }
-
-
+    } catch(e) {}
     if (data === 'bc_type_text') {
         saveChatStateSync(adminChatId, 'admin_broadcast_awaiting_text');
         await bot.sendMessage(adminChatId, "📝 Send me the text message for broadcast.");
@@ -294,18 +326,15 @@ bot.on('callback_query', async (callbackQuery) => {
     } else if (data === 'bc_cancel_broadcast_setup') {
         clearChatStateSync(adminChatId);
         await bot.sendMessage(adminChatId, "Broadcast setup cancelled.");
-    }
-    else if (data.startsWith('bc_confirm_send_')) {
+    } else if (data.startsWith('bc_confirm_send_')) {
         const adminState = getChatStateSync(adminChatId);
         if (!adminState || !adminState.data) {
             await bot.sendMessage(adminChatId, "Error: Broadcast data not found. Please start over.");
             clearChatStateSync(adminChatId);
             return;
         }
-        
         let broadcastPayload = {};
         const action = data.substring('bc_confirm_send_'.length);
-
         if (action === 'text') {
             broadcastPayload = { type: 'text', content: adminState.data.text };
         } else if (action === 'photo') {
@@ -319,29 +348,23 @@ bot.on('callback_query', async (callbackQuery) => {
             clearChatStateSync(adminChatId);
             return;
         }
-        
         await bot.sendMessage(adminChatId, `Broadcasting ${action}... please wait.`);
         await broadcastMessageToUsers(adminChatId, broadcastPayload);
         clearChatStateSync(adminChatId);
     }
 });
 
-
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
-
     if (!text && !msg.photo && !msg.video) return;
-    if (text === '/start' || text === '/ping') return;
-
+    if (text && (text === '/start' || text === '/ping')) return;
     const isAdmin = String(chatId) === ADMIN_ID;
     const currentChatState = getChatStateSync(chatId);
-
     if (isAdmin && currentChatState && currentChatState.state.startsWith('admin_broadcast_')) {
         const adminState = currentChatState.state;
         const adminData = currentChatState.data || {};
         const botUsername = (await bot.getMe()).username;
-
         if (adminState === 'admin_broadcast_awaiting_text') {
             saveChatStateSync(ADMIN_ID, 'admin_broadcast_confirm_text', { text: text });
             await bot.sendMessage(ADMIN_ID, `Text for broadcast:\n\n${text}\n\nConfirm send?`, {
@@ -389,7 +412,6 @@ bot.on('message', async (msg) => {
         }
         return;
     }
-
     if (text === '🎥 YouTube URL Shortener') {
         await bot.sendMessage(chatId, "📹 Please send the YouTube URL to shorten.");
         saveChatStateSync(chatId, 'awaiting_youtube_url');
@@ -424,18 +446,9 @@ bot.on('message', async (msg) => {
         statsMessage += `\nStats generated: ${new Date().toLocaleString()}`;
         await sendChunkedMessage(bot, chatId, statsMessage);
     } else if (text === '📢 Broadcast Message' && isAdmin) {
-        const broadcastOptions = {
-            inline_keyboard: [
-                [{ text: "Plain Text", callback_data: "bc_type_text" }],
-                [{ text: "Photo with Caption", callback_data: "bc_type_photo" }],
-                [{ text: "Video with Caption", callback_data: "bc_type_video" }],
-                [{ text: "Text with Inline Buttons", callback_data: "bc_type_advanced_text" }],
-                [{ text: "Cancel Setup", callback_data: "bc_cancel_broadcast_setup"}]
-            ]
-        };
+        const broadcastOptions = { inline_keyboard: [[{ text: "Plain Text", callback_data: "bc_type_text" }], [{ text: "Photo with Caption", callback_data: "bc_type_photo" }], [{ text: "Video with Caption", callback_data: "bc_type_video" }], [{ text: "Text with Inline Buttons", callback_data: "bc_type_advanced_text" }], [{ text: "Cancel Setup", callback_data: "bc_cancel_broadcast_setup"}]] };
         await bot.sendMessage(chatId, "📢 Select the type of broadcast message:", { reply_markup: broadcastOptions });
-    }
-    else if (currentChatState && !currentChatState.state.startsWith('admin_broadcast_')) {
+    } else if (currentChatState && !currentChatState.state.startsWith('admin_broadcast_')) {
         switch (currentChatState.state) {
             case 'awaiting_youtube_url':
                 if (isValidUrl(text)) {
@@ -461,22 +474,16 @@ bot.on('message', async (msg) => {
             case 'awaiting_custom_title':
                 const urlData = currentChatState.data;
                 urlData.title = text;
-                await bot.sendMessage(chatId, "🖼️ Now, please send the direct image URL for the preview.");
+                await bot.sendMessage(chatId, "🖼️ Great! Now, either send a photo directly to me, or paste a public image URL.");
                 saveChatStateSync(chatId, 'awaiting_custom_image', urlData);
                 break;
             case 'awaiting_custom_image':
                 if (isValidUrl(text)) {
                     const customData = currentChatState.data;
-                    customData.image = text;
-                    await bot.sendMessage(chatId, "⏳ Processing your custom URL... please wait.");
-                    const shortLinks = await shortenUrl(customData.url, customData.title, customData.image, String(chatId));
-                    if (shortLinks) {
-                        saveUserDataSync(chatId, customData.url, shortLinks.linkForSaving);
-                        let respMsg = `URLs with custom settings:\nV1: ${shortLinks.v1}\nV2: ${shortLinks.v2}\nV3: ${shortLinks.v3}\n\nTitle: ${customData.title}\nImage: ${customData.image}`;
-                        await bot.sendMessage(chatId, respMsg, { reply_markup: {inline_keyboard: [[{ text: '🚀 Start Another Bot', url: 'http://t.me/selfes_hack_robot?start' }]]}, disable_web_page_preview: false });
-                    } else await bot.sendMessage(chatId, "🚧 Custom URL request failed.");
-                    clearChatStateSync(chatId);
-                } else await bot.sendMessage(chatId, "❌ Invalid image URL format.");
+                    await processShorteningRequest(chatId, customData.url, customData.title, text);
+                } else {
+                    await bot.sendMessage(chatId, "That doesn't look like a valid URL. Please send a photo directly or paste a valid image URL.");
+                }
                 break;
             default: await bot.sendMessage(chatId, "❓ Unknown state. Use /start to reset."); clearChatStateSync(chatId); break;
         }
@@ -487,12 +494,44 @@ bot.on('message', async (msg) => {
 
 bot.on('photo', async (msg) => {
     const chatId = msg.chat.id;
-    if (String(chatId) !== ADMIN_ID) return;
-    const adminState = getChatStateSync(ADMIN_ID);
-    if (adminState && adminState.state === 'admin_broadcast_awaiting_photo') {
+    const adminStateForPhoto = getChatStateSync(ADMIN_ID);
+    const userStateForPhoto = getChatStateSync(chatId);
+
+    // Logic for Admin Broadcast
+    if (String(chatId) === ADMIN_ID && adminStateForPhoto && adminStateForPhoto.state === 'admin_broadcast_awaiting_photo') {
         const photoFileId = msg.photo[msg.photo.length - 1].file_id;
         saveChatStateSync(ADMIN_ID, 'admin_broadcast_awaiting_photo_caption', { photo_file_id: photoFileId });
         await bot.sendMessage(ADMIN_ID, "🖼️ Photo received. Now, send a caption for the photo, or type /skip for no caption.");
+        return;
+    }
+
+    // Handle photo upload for regular URL shortening using ImgBB
+    if (userStateForPhoto && userStateForPhoto.state === 'awaiting_custom_image') {
+        await bot.sendMessage(chatId, "🖼️ Photo received, preparing to upload...");
+        try {
+            const photoFileId = msg.photo[msg.photo.length - 1].file_id;
+            const file = await bot.getFile(photoFileId);
+            const telegramFileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+            
+            const downloadResponse = await axios.get(telegramFileUrl, {
+                responseType: 'arraybuffer'
+            });
+            const imageBuffer = Buffer.from(downloadResponse.data);
+            
+            const finalImageUrl = await uploadToImgBB(imageBuffer);
+
+            if (finalImageUrl) {
+                const customData = userStateForPhoto.data;
+                await processShorteningRequest(chatId, customData.url, customData.title, finalImageUrl);
+            } else {
+                await bot.sendMessage(chatId, "Sorry, I could not upload the photo to the image service. Please try again.");
+                clearChatStateSync(chatId);
+            }
+        } catch (error) {
+            console.error("Error processing user-uploaded photo for ImgBB:", error.message);
+            await bot.sendMessage(chatId, "Sorry, a critical error occurred while processing the photo. Please try again.");
+            clearChatStateSync(chatId);
+        }
     }
 });
 
