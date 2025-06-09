@@ -4,7 +4,7 @@
   "description": "A Telegram bot to shorten URLs with custom features and broadcasting.",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node bot.js"
   },
   "author": "",
   "license": "ISC",
