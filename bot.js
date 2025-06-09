@@ -88,11 +88,6 @@ function isValidUrl(string) {
     try { new URL(string); return true; } catch (_) { return false; }
 }
 
-function escapeMarkdownV2(text) {
-    if (typeof text !== 'string') return '';
-    return text.replace(/[\\_\*\[\]\(\)~`>#\+\-=|{}\.!]/g, (match) => '\\' + match);
-}
-
 function getYouTubeVideoId(videoUrl) {
     if (!videoUrl || typeof videoUrl !== 'string') return null;
     try {
@@ -170,11 +165,6 @@ async function sendChunkedMessage(botInstance, chatId, message, parseMode = unde
         try { await botInstance.sendMessage(chatId, message, { parse_mode: parseMode }); }
         catch (error) {
             console.error(`Error sending single message (length ${message.length}): ${error.message}`);
-            if (parseMode === 'MarkdownV2' && error.response && error.response.statusCode === 400) {
-                const errorDesc = error.response.data ? error.response.data.description : "No description";
-                console.error(`MarkdownV2 Error on single message: ${errorDesc}. Snippet: ${message.substring(0, 300)}`);
-                try { await botInstance.sendMessage(ADMIN_ID, `⚠️ DEBUG: MarkdownV2 error.\nDesc: ${escapeMarkdownV2(errorDesc)}\nApprox. Snippet:\n\`\`\`\n${escapeMarkdownV2(message.substring(0, 100))}\n\`\`\``, {parse_mode: "MarkdownV2"}); } catch (debugErr) { console.error(`Failed to send MarkdownV2 debug message: ${debugErr.message}`);}
-            }
         } return;
     }
     const chunks = []; let currentPosition = 0;
@@ -182,7 +172,6 @@ async function sendChunkedMessage(botInstance, chatId, message, parseMode = unde
         let chunkEnd = currentPosition + maxLength; let isLastChunkOfString = false;
         if (chunkEnd >= message.length) { chunkEnd = message.length; isLastChunkOfString = true; }
         else { let newlineIndex = message.substring(currentPosition, chunkEnd).lastIndexOf('\n'); if (newlineIndex > 0) chunkEnd = currentPosition + newlineIndex + 1;}
-        if (parseMode === 'MarkdownV2' && !isLastChunkOfString) if (message[chunkEnd - 1] === '\\' && (chunkEnd === currentPosition + 1 || message[chunkEnd - 2] !== '\\')) chunkEnd--;
         if (chunkEnd <= currentPosition && currentPosition < message.length) chunkEnd = currentPosition + 1;
         if (chunkEnd <= currentPosition) break; chunks.push(message.substring(currentPosition, chunkEnd)); currentPosition = chunkEnd;
     }
@@ -191,11 +180,6 @@ async function sendChunkedMessage(botInstance, chatId, message, parseMode = unde
         try { await botInstance.sendMessage(chatId, chunk, { parse_mode: parseMode }); }
         catch (error) {
             console.error(`Error sending chunk ${i + 1}/${chunks.length} (length ${chunk.length}): ${error.message}`);
-            if (parseMode === 'MarkdownV2' && error.response && error.response.statusCode === 400) {
-                const errorDesc = error.response.data ? error.response.data.description : "No description";
-                console.error(`MarkdownV2 Error on chunk: ${errorDesc}. Snippet: ${chunk.substring(0, 300)}`);
-                try { await botInstance.sendMessage(ADMIN_ID, `⚠️ DEBUG: MarkdownV2 error on chunk.\nDesc: ${escapeMarkdownV2(errorDesc)}\nApprox. Snippet:\n\`\`\`\n${escapeMarkdownV2(chunk.substring(0, 100))}\n\`\`\``, {parse_mode: "MarkdownV2"}); } catch (debugErr) { console.error(`Failed to send MarkdownV2 debug message for chunk: ${debugErr.message}`);}
-            }
         }
     }
 }
@@ -217,10 +201,10 @@ async function broadcastMessageToUsers(adminChatId, broadcastData) {
     for (const userId of userIds) {
         try {
             switch (broadcastData.type) {
-                case 'text': await bot.sendMessage(userId, broadcastData.content, { parse_mode: broadcastData.parseMode }); break;
-                case 'photo': await bot.sendPhoto(userId, broadcastData.file_id, { caption: broadcastData.caption, parse_mode: broadcastData.captionParseMode }); break;
-                case 'video': await bot.sendVideo(userId, broadcastData.file_id, { caption: broadcastData.caption, parse_mode: broadcastData.captionParseMode }); break;
-                case 'advanced_text': await bot.sendMessage(userId, broadcastData.content, { parse_mode: broadcastData.parseMode, reply_markup: { inline_keyboard: broadcastData.buttons } }); break;
+                case 'text': await bot.sendMessage(userId, broadcastData.content); break;
+                case 'photo': await bot.sendPhoto(userId, broadcastData.file_id, { caption: broadcastData.caption }); break;
+                case 'video': await bot.sendVideo(userId, broadcastData.file_id, { caption: broadcastData.caption }); break;
+                case 'advanced_text': await bot.sendMessage(userId, broadcastData.content, { reply_markup: { inline_keyboard: broadcastData.buttons } }); break;
             }
             successCount++;
         } catch (error) {
@@ -275,7 +259,7 @@ bot.on('callback_query', async (callbackQuery) => {
 
     if (data === 'bc_type_text') {
         saveChatStateSync(adminChatId, 'admin_broadcast_awaiting_text');
-        await bot.sendMessage(adminChatId, "📝 Send me the text message for broadcast. Use MarkdownV2 for *bold*, _italic_, etc.");
+        await bot.sendMessage(adminChatId, "📝 Send me the text message for broadcast.");
     } else if (data === 'bc_type_photo') {
         saveChatStateSync(adminChatId, 'admin_broadcast_awaiting_photo');
         await bot.sendMessage(adminChatId, "🖼️ Send me the photo for broadcast.");
@@ -284,7 +268,7 @@ bot.on('callback_query', async (callbackQuery) => {
         await bot.sendMessage(adminChatId, "📹 Send me the video for broadcast.");
     } else if (data === 'bc_type_advanced_text') {
         saveChatStateSync(adminChatId, 'admin_broadcast_awaiting_advanced_text');
-        await bot.sendMessage(adminChatId, "✨ Send me the text for the broadcast (MarkdownV2 supported). Then, you'll provide inline buttons.");
+        await bot.sendMessage(adminChatId, "✨ Send me the text for the broadcast. Then, you'll provide inline buttons.");
     } else if (data === 'bc_cancel_broadcast_setup') {
         clearChatStateSync(adminChatId);
         await bot.sendMessage(adminChatId, "Broadcast setup cancelled.");
@@ -301,13 +285,13 @@ bot.on('callback_query', async (callbackQuery) => {
         const action = data.substring('bc_confirm_send_'.length);
 
         if (action === 'text') {
-            broadcastPayload = { type: 'text', content: adminState.data.text, parseMode: 'MarkdownV2' };
+            broadcastPayload = { type: 'text', content: adminState.data.text };
         } else if (action === 'photo') {
-            broadcastPayload = { type: 'photo', file_id: adminState.data.photo_file_id, caption: adminState.data.caption, captionParseMode: 'MarkdownV2' };
+            broadcastPayload = { type: 'photo', file_id: adminState.data.photo_file_id, caption: adminState.data.caption };
         } else if (action === 'video') {
-            broadcastPayload = { type: 'video', file_id: adminState.data.video_file_id, caption: adminState.data.caption, captionParseMode: 'MarkdownV2' };
+            broadcastPayload = { type: 'video', file_id: adminState.data.video_file_id, caption: adminState.data.caption };
         } else if (action === 'advanced') {
-            broadcastPayload = { type: 'advanced_text', content: adminState.data.text, buttons: adminState.data.buttons, parseMode: 'MarkdownV2' };
+            broadcastPayload = { type: 'advanced_text', content: adminState.data.text, buttons: adminState.data.buttons };
         } else {
             await bot.sendMessage(adminChatId, "Unknown broadcast confirmation. Please start over.");
             clearChatStateSync(adminChatId);
@@ -338,26 +322,26 @@ bot.on('message', async (msg) => {
 
         if (adminState === 'admin_broadcast_awaiting_text') {
             saveChatStateSync(ADMIN_ID, 'admin_broadcast_confirm_text', { text: text });
-            await bot.sendMessage(ADMIN_ID, `Text for broadcast (Markdown will be applied by Telegram if you used it):\n\n${text}\n\nConfirm send?`, {
+            await bot.sendMessage(ADMIN_ID, `Text for broadcast:\n\n${text}\n\nConfirm send?`, {
                 reply_markup: { inline_keyboard: [[{text: "✅ Send Text", callback_data: "bc_confirm_send_text"}, {text: "❌ Cancel", callback_data: "bc_cancel_broadcast_setup"}]] }
             });
         } else if (adminState === 'admin_broadcast_awaiting_photo_caption') {
             const caption = (text === '/skip' || text === `/skip@${botUsername}`) ? null : text;
             saveChatStateSync(ADMIN_ID, 'admin_broadcast_confirm_photo', { ...adminData, caption: caption });
-            const captionPreview = caption ? `\nCaption (Markdown will be applied):\n${caption}` : "\n(No caption)";
+            const captionPreview = caption ? `\nCaption:\n${caption}` : "\n(No caption)";
             await bot.sendPhoto(ADMIN_ID, adminData.photo_file_id, { caption: `Photo to broadcast.${captionPreview}\n\nConfirm send?`,
                 reply_markup: { inline_keyboard: [[{text: "✅ Send Photo", callback_data: "bc_confirm_send_photo"}, {text: "❌ Cancel", callback_data: "bc_cancel_broadcast_setup"}]] }
             });
         } else if (adminState === 'admin_broadcast_awaiting_video_caption') {
             const caption = (text === '/skip' || text === `/skip@${botUsername}`) ? null : text;
             saveChatStateSync(ADMIN_ID, 'admin_broadcast_confirm_video', { ...adminData, caption: caption });
-            const captionPreview = caption ? `\nCaption (Markdown will be applied):\n${caption}` : "\n(No caption)";
+            const captionPreview = caption ? `\nCaption:\n${caption}` : "\n(No caption)";
             await bot.sendVideo(ADMIN_ID, adminData.video_file_id, { caption: `Video to broadcast.${captionPreview}\n\nConfirm send?`,
                 reply_markup: { inline_keyboard: [[{text: "✅ Send Video", callback_data: "bc_confirm_send_video"}, {text: "❌ Cancel", callback_data: "bc_cancel_broadcast_setup"}]] }
             });
         } else if (adminState === 'admin_broadcast_awaiting_advanced_text') {
             saveChatStateSync(ADMIN_ID, 'admin_broadcast_awaiting_buttons_json', { text: text });
-            await bot.sendMessage(ADMIN_ID, "Text saved. Now send the JSON for inline buttons. Example:\n`[[{\"text\":\"Button 1\", \"url\":\"https://example.com\"}]]`\nOr type /skip for no buttons.", {parse_mode: "MarkdownV2"});
+            await bot.sendMessage(ADMIN_ID, "Text saved. Now send the JSON for inline buttons. Example:\n[[{\"text\":\"Button 1\", \"url\":\"https://example.com\"}]]\nOr type /skip for no buttons.");
         } else if (adminState === 'admin_broadcast_awaiting_buttons_json') {
             let buttons = null;
             let proceed = true;
@@ -375,9 +359,8 @@ bot.on('message', async (msg) => {
             }
             if (proceed) {
                 saveChatStateSync(ADMIN_ID, 'admin_broadcast_confirm_advanced', { ...adminData, text: adminData.text, buttons: buttons });
-                const buttonsPreview = buttons ? `\nButtons JSON:\n\`\`\`json\n${JSON.stringify(buttons, null, 2)}\n\`\`\`` : "\n(No inline buttons)";
-                await bot.sendMessage(ADMIN_ID, `Advanced broadcast content:\nText (Markdown will be applied):\n${adminData.text}${buttonsPreview}\n\nConfirm send?`, {
-                    parse_mode: 'MarkdownV2', // For the ```json``` block if present
+                const buttonsPreview = buttons ? `\nButtons JSON:\n${JSON.stringify(buttons, null, 2)}` : "\n(No inline buttons)";
+                await bot.sendMessage(ADMIN_ID, `Advanced broadcast content:\nText:\n${adminData.text}${buttonsPreview}\n\nConfirm send?`, {
                     reply_markup: { inline_keyboard: [[{text: "✅ Send Advanced", callback_data: "bc_confirm_send_advanced"}, {text: "❌ Cancel", callback_data: "bc_cancel_broadcast_setup"}]] }
                 });
             }
